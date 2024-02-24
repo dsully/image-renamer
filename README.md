@@ -16,6 +16,8 @@ cargo install --git https://github.com/dsully/image-renamer
 
 ## Getting Started
 
+You'll need an [OpenAI API key](https://platform.openai.com/account/api-keys), set in the environment variable: `OPENAI_API_KEY`.
+
 ```shell
 Usage: image-renamer [OPTIONS] [PATHS]...
 
