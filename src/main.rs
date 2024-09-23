@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::pedantic)]
+
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -25,7 +27,6 @@ use figment::{
 use fs_err as fs;
 use indicatif::{ProgressBar, ProgressStyle};
 use infer::Infer;
-use serde_json;
 use walkdir::WalkDir;
 
 const REVERT_PATH: &str = "revert-mappings.json";
@@ -59,31 +60,32 @@ async fn main() -> Result<()> {
         Figment::new().merge(Json::file(&revert_path)).extract()?;
 
     if args.revert {
-        revert_filenames(args, &mut revert_mappings, &revert_path)?
+        revert_filenames(&args, &mut revert_mappings, &revert_path)?;
     } else {
-        rename_files(args, &mut revert_mappings, &revert_path).await?
-    }
+        rename_files(&args, &mut revert_mappings, &revert_path).await?;
+    };
 
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn rename_files(
-    args: Cli,
+    args: &Cli,
     revert_mappings: &mut RevertMappings,
-    revert_path: &PathBuf,
+    revert_path: &Path,
 ) -> Result<()> {
     let client = Client::new();
     let infer = Infer::new();
 
     let mut paths: Vec<PathBuf> = vec![];
 
-    for path in args.paths.iter() {
-        if path.is_file() && is_image_file(&path, &infer) {
+    for path in &args.paths {
+        if path.is_file() && is_image_file(path, &infer) {
             paths.push(path.clone());
         } else if path.is_dir() {
-            for entry in WalkDir::new(&path)
+            for entry in WalkDir::new(path)
                 .into_iter()
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .filter(|e| e.path().is_file() && is_image_file(e.path(), &infer))
             {
                 paths.push(entry.into_path());
@@ -95,7 +97,7 @@ async fn rename_files(
 
     println!("Processing {} images...", paths.len());
 
-    for filename in paths.iter() {
+    for filename in &paths {
         let s = spinner();
 
         s.set_message(format!("⊙ Generating new filename for: {filename:?} ..."));
@@ -109,9 +111,9 @@ async fn rename_files(
         let mut content: Vec<ChatCompletionRequestMessageContentPart> = vec![];
 
         // Grab either the EXIF date or the file creation date
-        let date_instructions = match file_date(&filename) {
+        let date_instructions = match file_date(filename) {
            Some(date) => format!("If the original filename doesn't contain date information, use this date instead: {date}"),
-            _ => "".to_string()
+            _ => String::new()
         };
 
         content.push(ChatCompletionRequestMessageContentPart::Text(
@@ -126,8 +128,7 @@ async fn rename_files(
 
                        The filename should use dashes to separate words and should not include any special characters.
 
-                       The filename should be no more than 64 characters long, not including the date information.")
-                    .into(),
+                       The filename should be no more than 64 characters long, not including the date information."),
             },
         ));
 
@@ -135,8 +136,7 @@ async fn rename_files(
             ChatCompletionRequestMessageContentPartImage {
                 r#type: "image_url".into(),
                 image_url: format!("data:image/jpeg;base64,{encoded}").into(),
-            }
-            .into(),
+            },
         ));
 
         let request = CreateChatCompletionRequestArgs::default()
@@ -150,34 +150,30 @@ async fn rename_files(
 
         let response = client.chat().create(request).await?;
 
-        let new_path = match response.choices.first() {
-            Some(choice) => match &choice.message.content {
-                Some(text) => {
-                    let new_path = filename.with_file_name(text);
+        let new_path = if let Some(choice) = response.choices.first() {
+            if let Some(text) = &choice.message.content {
+                let new_path = filename.with_file_name(text);
 
-                    if new_path.is_file() {
-                        s.finish_with_message(format!(
-                            "Filename already exists, skipping file: {filename:?}"
-                        ));
-                        continue;
-                    }
-
-                    new_path
-                }
-                _ => {
+                if new_path.is_file() {
                     s.finish_with_message(format!(
-                        "No response from OpenAI, skipping file: {filename:?}"
+                        "Filename already exists, skipping file: {filename:?}"
                     ));
                     continue;
                 }
-            },
-            _ => {
+
+                new_path
+            } else {
                 s.finish_with_message(format!(
                     "No response from OpenAI, skipping file: {filename:?}"
                 ));
-
                 continue;
             }
+        } else {
+            s.finish_with_message(format!(
+                "No response from OpenAI, skipping file: {filename:?}"
+            ));
+
+            continue;
         };
 
         s.finish_and_clear();
@@ -197,7 +193,7 @@ async fn rename_files(
         if rename {
             println!("Renaming {filename:?} to: {new_path:?}");
 
-            fs::rename(&filename, &new_path).expect("Failed to rename file");
+            fs::rename(filename, &new_path).expect("Failed to rename file");
         }
 
         revert_mappings.insert(
@@ -206,13 +202,13 @@ async fn rename_files(
         );
     }
 
-    write_revert_mappings(&revert_path, &revert_mappings)
+    write_revert_mappings(revert_path, revert_mappings)
 }
 
 fn revert_filenames(
-    args: Cli,
+    args: &Cli,
     revert_mappings: &mut RevertMappings,
-    revert_path: &PathBuf,
+    revert_path: &Path,
 ) -> Result<()> {
     //
     let to_revert: Vec<String> = if args.paths.is_empty() {
@@ -251,13 +247,13 @@ fn revert_filenames(
         if revert {
             println!("Reverting {new_path:?} to: {original_path:?}");
 
-            fs::rename(&new_path, &original_path).expect("Failed to rename file");
+            fs::rename(&new_path, original_path).expect("Failed to rename file");
 
             revert_mappings.remove(&new_path);
         }
     }
 
-    write_revert_mappings(revert_path, &revert_mappings)
+    write_revert_mappings(revert_path, revert_mappings)
 }
 
 fn data_path() -> Result<PathBuf> {
@@ -298,9 +294,8 @@ fn stat_date(path: &Path) -> Option<String> {
 fn exif_date(path: &Path) -> Option<String> {
     let fh = File::open(path).expect("Couldn't open '{file}' in read-only mode");
 
-    let exif = match ExifReader::new().read_from_container(&mut BufReader::new(&fh)) {
-        Ok(exif) => exif,
-        Err(_) => return None,
+    let Ok(exif) = ExifReader::new().read_from_container(&mut BufReader::new(&fh)) else {
+        return None;
     };
 
     exif.get_field(Tag::DateTimeOriginal, In::PRIMARY)
@@ -308,7 +303,7 @@ fn exif_date(path: &Path) -> Option<String> {
 }
 
 fn write_revert_mappings(revert_path: &Path, revert_mappings: &RevertMappings) -> Result<()> {
-    let file = File::create(&revert_path)?;
+    let file = File::create(revert_path)?;
 
     serde_json::to_writer_pretty(file, &revert_mappings).map_err(Into::into)
 }
