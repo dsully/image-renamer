@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_openai::{
     types::{
-        ChatCompletionRequestMessageContentPart, ChatCompletionRequestMessageContentPartImage,
-        ChatCompletionRequestMessageContentPartText, ChatCompletionRequestUserMessageArgs,
+        ChatCompletionRequestMessageContentPartImageArgs,
+        ChatCompletionRequestMessageContentPartTextArgs, ChatCompletionRequestUserMessageArgs,
         ChatCompletionRequestUserMessageContent, CreateChatCompletionRequestArgs,
     },
     Client,
@@ -80,6 +80,7 @@ async fn rename_files(
     let mut paths: Vec<PathBuf> = vec![];
 
     for path in &args.paths {
+        //
         if path.is_file() && is_image_file(path, &infer) {
             paths.push(path.clone());
         } else if path.is_dir() {
@@ -108,18 +109,16 @@ async fn rename_files(
 
         let encoded = BASE64_STANDARD.encode(&buffer);
 
-        let mut content: Vec<ChatCompletionRequestMessageContentPart> = vec![];
-
         // Grab either the EXIF date or the file creation date
         let date_instructions = match file_date(filename) {
            Some(date) => format!("If the original filename doesn't contain date information, use this date instead: {date}"),
             _ => String::new()
         };
 
-        content.push(ChatCompletionRequestMessageContentPart::Text(
-            ChatCompletionRequestMessageContentPartText {
-                r#type: "text".into(),
-                text: format!("Return a filename that describes this image, including the extension and optionally the date information from
+        let mut content = vec![];
+
+        content.push(ChatCompletionRequestMessageContentPartTextArgs::default()
+                .text(format!("Return a filename that describes this image, including the extension and optionally the date information from
                        the original name: {filename:?} in the format of YYYY-MM-DD at the beginning of the filename.
 
                        {date_instructions}
@@ -128,16 +127,16 @@ async fn rename_files(
 
                        The filename should use dashes to separate words and should not include any special characters.
 
-                       The filename should be no more than 64 characters long, not including the date information."),
-            },
-        ));
+                       The filename should be no more than 64 characters long, not including the date information.")
+            ) .build()?.into()
+        );
 
-        content.push(ChatCompletionRequestMessageContentPart::Image(
-            ChatCompletionRequestMessageContentPartImage {
-                r#type: "image_url".into(),
-                image_url: format!("data:image/jpeg;base64,{encoded}").into(),
-            },
-        ));
+        content.push(
+            ChatCompletionRequestMessageContentPartImageArgs::default()
+                .image_url(format!("data:image/jpeg;base64,{encoded}"))
+                .build()?
+                .into(),
+        );
 
         let request = CreateChatCompletionRequestArgs::default()
             .model("gpt-4-vision-preview")
